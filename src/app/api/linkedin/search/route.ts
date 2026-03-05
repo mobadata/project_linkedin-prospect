@@ -374,6 +374,24 @@ function termMatchesText(text: string, term: string): boolean {
   return false;
 }
 
+function termMatchesTextLoose(text: string, term: string): boolean {
+  if (!term || term.length < 4) return false;
+  const variants = new Set<string>();
+  variants.add(term);
+  variants.add(term.replace(/s$/, ""));
+  variants.add(term + "s");
+  variants.add(term.replace(/e$/, ""));
+  variants.add(term.replace(/es$/, ""));
+
+  for (const variant of variants) {
+    if (variant.length < 4) continue;
+    const escaped = variant.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const regex = new RegExp(`(^|[\\s,;.|/()\\-])${escaped}`, "i");
+    if (regex.test(text)) return true;
+  }
+  return false;
+}
+
 function matchesTitle(prospect: ProspectResult, jobTitle: string): boolean {
   if (!jobTitle?.trim()) return true;
 
@@ -501,9 +519,14 @@ function matchesSectorStrict(
   const allMatched = [...new Set([...directMatch, ...synonymMatch, ...autoMatch])];
   const hasDirectMatch = directMatch.length > 0;
 
+  // Prefix matching loose : "design" matche "Designer", "marketing" matche "Marketeur", etc.
+  const looseDirectMatch = sectorWords.filter((w) => termMatchesTextLoose(prospectText, w));
+  const looseSynonymMatch = synonyms.filter((s) => termMatchesTextLoose(prospectText, normalize(s)));
+  const allLoose = [...new Set([...looseDirectMatch, ...looseSynonymMatch])];
+
   return {
-    matches: hasDirectMatch || allMatched.length >= 2,
-    matchedTerms: allMatched,
+    matches: hasDirectMatch || allMatched.length >= 2 || allLoose.length > 0,
+    matchedTerms: [...new Set([...allMatched, ...allLoose])],
   };
 }
 
