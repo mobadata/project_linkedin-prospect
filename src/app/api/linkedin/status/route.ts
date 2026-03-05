@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { createServerSupabaseClient } from "@/src/lib/supabase/server";
+import { unipileClient, isUnipileConfigured } from "@/src/lib/unipile/client";
 
 export async function GET() {
   try {
@@ -29,6 +30,38 @@ export async function GET() {
     }
 
     const connected = !!session && session.status === "connected" && !!session.unipile_account_id;
+
+    // Si pas connecté en base, vérifier directement sur Unipile (le webhook a pu échouer)
+    if (!connected && isUnipileConfigured()) {
+      try {
+        const accounts = await unipileClient.account.getAll() as {
+          items?: Array<{ id?: string; name?: string; type?: string }>;
+        };
+        const match = (accounts.items ?? []).find(
+          (a) => a.name === user.id && a.type === "LINKEDIN"
+        );
+        if (match?.id) {
+          await supabase.from("linkedin_sessions").upsert(
+            {
+              user_id: user.id,
+              unipile_account_id: match.id,
+              status: "connected",
+              updated_at: new Date().toISOString(),
+            },
+            { onConflict: "user_id" }
+          );
+          return NextResponse.json({
+            connected: true,
+            status: "connected",
+            updated_at: new Date().toISOString(),
+            account_restricted: false,
+          });
+        }
+      } catch (e) {
+        console.error("[Status] Erreur vérification Unipile:", e);
+      }
+    }
+
     return NextResponse.json({
       connected,
       status: session?.status ?? "disconnected",
