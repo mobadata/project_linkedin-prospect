@@ -18,38 +18,47 @@ function useDebounce(value: string, delay: number) {
 }
 
 const INDUSTRY_HINTS: Record<string, string[]> = {
-  "publicité": ["advertising"],
-  "publicitaire": ["advertising"],
-  "objet publicitaire": ["advertising", "promotional"],
-  "marketing": ["marketing"],
-  "tech": ["technology", "software"],
-  "technologie": ["technology"],
+  "publicité": ["advertising", "advertising services"],
+  "publicitaire": ["advertising", "advertising services", "promotional"],
+  "objet publicitaire": ["advertising services", "promotional", "advertising"],
+  "goodies": ["advertising services", "promotional"],
+  "marketing": ["marketing", "marketing services"],
+  "tech": ["technology", "software", "information technology"],
+  "technologie": ["technology", "information technology"],
   "informatique": ["information technology", "software", "computer"],
-  "santé": ["health", "hospital", "medical"],
-  "finance": ["financial", "banking"],
+  "santé": ["health", "hospital", "medical", "healthcare"],
+  "finance": ["financial", "banking", "financial services"],
   "banque": ["banking"],
   "immobilier": ["real estate"],
   "éducation": ["education"],
-  "automobile": ["automotive"],
-  "mode": ["fashion", "apparel"],
+  "automobile": ["automotive", "motor vehicle"],
+  "mode": ["fashion", "apparel", "textile"],
   "luxe": ["luxury", "fashion"],
-  "restauration": ["food", "restaurant"],
+  "restauration": ["food", "restaurant", "food and beverage"],
   "construction": ["construction"],
-  "transport": ["transportation"],
-  "énergie": ["energy", "oil"],
-  "juridique": ["legal", "law"],
+  "transport": ["transportation", "logistics", "trucking"],
+  "énergie": ["energy", "oil", "renewable"],
+  "juridique": ["legal", "law", "legal services"],
   "assurance": ["insurance"],
-  "conseil": ["consulting"],
+  "conseil": ["consulting", "management consulting"],
   "commerce": ["retail", "wholesale"],
-  "média": ["media", "broadcast"],
+  "média": ["media", "broadcast", "online media"],
   "telecom": ["telecommunications"],
   "agriculture": ["farming", "agriculture"],
   "industrie": ["manufacturing", "industrial"],
   "pharmaceutique": ["pharmaceutical"],
   "aéronautique": ["aviation", "aerospace"],
-  "sport": ["sports"],
+  "sport": ["sports", "sporting goods"],
   "hôtellerie": ["hospitality", "hotel"],
   "tourisme": ["travel", "tourism"],
+  "imprimerie": ["printing", "printing services"],
+  "textile": ["textile", "textile manufacturing"],
+  "cosmétique": ["cosmetics"],
+  "logistique": ["logistics", "transportation"],
+  "btp": ["construction", "building construction"],
+  "communication": ["advertising", "public relations", "marketing"],
+  "événementiel": ["events", "events services"],
+  "emballage": ["packaging", "packaging and containers"],
 };
 
 function ParamAutocomplete({
@@ -65,7 +74,7 @@ function ParamAutocomplete({
   placeholder: string;
   type: "INDUSTRY" | "LOCATION";
   selected: LinkedInParam | null;
-  onSelect: (item: LinkedInParam) => void;
+  onSelect: (item: LinkedInParam, queryUsed?: string) => void;
   onClear: () => void;
   onTextChange?: (text: string) => void;
 }) {
@@ -99,10 +108,16 @@ function ParamAutocomplete({
           if (!seen.has(item.id)) { seen.add(item.id); allItems.push(item); }
         }
 
-        if (type === "INDUSTRY" && allItems.length === 0) {
+        if (type === "INDUSTRY" && allItems.length < 3) {
           const lc = debounced.toLowerCase().trim();
-          const englishTerms = INDUSTRY_HINTS[lc] ?? [];
-          for (const term of englishTerms) {
+          const matchedHints: string[] = [];
+          for (const [frKey, enTerms] of Object.entries(INDUSTRY_HINTS)) {
+            if (lc.includes(frKey) || frKey.includes(lc)) {
+              matchedHints.push(...enTerms);
+            }
+          }
+          const uniqueHints = [...new Set(matchedHints)];
+          for (const term of uniqueHints) {
             if (cancelled) break;
             const r2 = await fetch(
               `/api/linkedin/search-params?type=INDUSTRY&keywords=${encodeURIComponent(term)}&limit=5`
@@ -180,7 +195,7 @@ function ParamAutocomplete({
             {suggestions.map((s) => (
               <li key={s.id}>
                 <button type="button"
-                  onClick={() => { onSelect(s); setQuery(""); setOpen(false); setSuggestions([]); onTextChange?.(""); }}
+                  onClick={() => { onSelect(s, type === "INDUSTRY" ? debounced : undefined); setQuery(""); setOpen(false); setSuggestions([]); onTextChange?.(""); }}
                   className="w-full px-3 py-2 text-left text-sm text-slate-700 transition hover:bg-orange-50 hover:text-[#EA580C]">
                   {s.title}
                 </button>
@@ -209,6 +224,8 @@ interface SearchProspect {
   company: string;
   linkedin_url: string;
   profile_photo: string | null;
+  sectorMatch?: boolean;
+  matchedTerms?: string[];
 }
 
 interface SavedProspect {
@@ -229,12 +246,17 @@ export default function DashboardProspectsPage() {
   const [selectedIndustry, setSelectedIndustry] = useState<LinkedInParam | null>(null);
   const [selectedLocation, setSelectedLocation] = useState<LinkedInParam | null>(null);
   const [industryText, setIndustryText] = useState("");
+  const [sectorOriginalText, setSectorOriginalText] = useState("");
   const [locationText, setLocationText] = useState("");
   const [searchLoading, setSearchLoading] = useState(false);
   const [saveLoading, setSaveLoading] = useState(false);
   const [prospects, setProspects] = useState<SearchProspect[]>([]);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [message, setMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
+  const [sectorQueryUsed, setSectorQueryUsed] = useState<string | null>(null);
+  const [totalRelevant, setTotalRelevant] = useState<number | null>(null);
+  const [totalOthers, setTotalOthers] = useState<number | null>(null);
+  const [showPartialResults, setShowPartialResults] = useState(false);
 
   const [savedProspects, setSavedProspects] = useState<SavedProspect[]>([]);
   const [apolloStatus, setApolloStatus] = useState<{ configured: boolean; credits: number | null } | null>(null);
@@ -302,29 +324,82 @@ export default function DashboardProspectsPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  const resolveIndustry = async (text: string): Promise<LinkedInParam | null> => {
+    const lc = text.toLowerCase().trim();
+    const termsToTry: string[] = [text];
+    for (const [frKey, enTerms] of Object.entries(INDUSTRY_HINTS)) {
+      if (lc.includes(frKey) || frKey.includes(lc)) {
+        termsToTry.push(...enTerms);
+      }
+    }
+    const seen = new Set<string>();
+    for (const term of termsToTry) {
+      if (seen.has(term)) continue;
+      seen.add(term);
+      try {
+        const res = await fetch(`/api/linkedin/search-params?type=INDUSTRY&keywords=${encodeURIComponent(term)}&limit=1`);
+        const data = await res.json().catch(() => ({}));
+        const item = data.items?.[0];
+        if (item?.id && item?.title) return { id: item.id, title: item.title };
+      } catch { /* continue */ }
+    }
+    return null;
+  };
+
+  const resolveLocation = async (text: string): Promise<LinkedInParam | null> => {
+    try {
+      const res = await fetch(`/api/linkedin/search-params?type=LOCATION&keywords=${encodeURIComponent(text)}&limit=1`);
+      const data = await res.json().catch(() => ({}));
+      const item = data.items?.[0];
+      if (item?.id && item?.title) return { id: item.id, title: item.title };
+    } catch { /* ignore */ }
+    return null;
+  };
+
   const handleSearch = async (e: React.FormEvent) => {
     e.preventDefault();
     setSearchLoading(true);
     setMessage(null);
     setProspects([]);
     setSelected(new Set());
+    setShowPartialResults(false);
 
     try {
-      const hasIndustryId = !!selectedIndustry;
-      const hasLocationId = !!selectedLocation;
+      const sectorQuery = (industryText || selectedIndustry?.title || "").trim() || undefined;
+      const sectorOriginalTextToSend = (sectorOriginalText || industryText || "").trim() || undefined;
+      let resolvedIndustry = selectedIndustry;
+      let resolvedLocation = selectedLocation;
 
-      const keywordParts = [jobTitle.trim()];
-      if (!hasIndustryId && industryText.trim()) keywordParts.push(industryText.trim());
-      if (!hasLocationId && locationText.trim()) keywordParts.push(locationText.trim());
-      const keywords = keywordParts.filter(Boolean).join(" ");
+      if (!selectedIndustry && industryText.trim()) {
+        const auto = await resolveIndustry(industryText.trim());
+        if (auto) {
+          resolvedIndustry = auto;
+          setSelectedIndustry(auto);
+          setSectorOriginalText(industryText.trim());
+          setIndustryText("");
+        }
+      }
+      if (!selectedLocation && locationText.trim()) {
+        const auto = await resolveLocation(locationText.trim());
+        if (auto) {
+          resolvedLocation = auto;
+          setSelectedLocation(auto);
+          setLocationText("");
+        }
+      }
+
+      const industryIds = resolvedIndustry ? [Number(resolvedIndustry.id)] : [];
+      const locationIds = resolvedLocation ? [Number(resolvedLocation.id)] : [];
 
       const res = await fetch("/api/linkedin/search", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          jobTitle: keywords || undefined,
-          industryIds: hasIndustryId ? [Number(selectedIndustry.id)] : [],
-          locationIds: hasLocationId ? [Number(selectedLocation.id)] : [],
+          jobTitle: jobTitle.trim() || undefined,
+          locationIds,
+          industryIds,
+          sectorQuery: sectorQuery || undefined,
+          sectorOriginalText: sectorOriginalTextToSend,
         }),
       });
 
@@ -338,18 +413,36 @@ export default function DashboardProspectsPage() {
         return;
       }
 
-      setProspects(data.prospects ?? []);
-      if ((data.prospects ?? []).length === 0) {
+      const prospectsList = data.prospects ?? [];
+      setProspects(prospectsList);
+      setSectorQueryUsed(data.sectorQuery ?? null);
+      setTotalRelevant(data.totalRelevant ?? null);
+      setTotalOthers(data.totalOthers ?? null);
+
+      if (prospectsList.length === 0) {
         const dbg = data.debug;
         let text = "Aucun nouveau prospect trouvé (ou déjà en base).";
         if (dbg && typeof dbg.scraped === "number") {
           if (dbg.scraped === 0) {
-            text = "LinkedIn n'a renvoyé aucun résultat (vérifiez la connexion LinkedIn ou réessayez).";
+            const unipileErr = dbg.unipileError;
+            text = unipileErr
+              ? `LinkedIn n'a renvoyé aucun résultat. Erreur Unipile : ${unipileErr}`
+              : "LinkedIn n'a renvoyé aucun résultat (vérifiez la connexion LinkedIn ou réessayez).";
           } else if (dbg.afterDedupe === 0) {
             text = "Tous les prospects trouvés sont déjà en base.";
           }
         }
         setMessage({ type: "success", text });
+      } else if ((data.totalRelevant ?? 0) > 0) {
+        setMessage({
+          type: "success",
+          text: `${data.totalRelevant} résultat(s) correspondent à TOUS vos critères.`,
+        });
+      } else if ((data.totalOthers ?? 0) > 0) {
+        setMessage({
+          type: "success",
+          text: `Aucun résultat ne correspond à tous vos critères. ${data.totalOthers} résultat(s) partiel(s) trouvé(s).`,
+        });
       }
     } catch {
       setMessage({ type: "error", text: "Erreur réseau ou serveur." });
@@ -598,8 +691,11 @@ export default function DashboardProspectsPage() {
             placeholder="ex: Publicité, Tech, Santé…"
             type="INDUSTRY"
             selected={selectedIndustry}
-            onSelect={setSelectedIndustry}
-            onClear={() => setSelectedIndustry(null)}
+            onSelect={(item, queryUsed) => {
+              setSelectedIndustry(item);
+              if (queryUsed) setSectorOriginalText(queryUsed);
+            }}
+            onClear={() => { setSelectedIndustry(null); setSectorOriginalText(""); }}
             onTextChange={setIndustryText}
           />
           <ParamAutocomplete
@@ -670,18 +766,40 @@ export default function DashboardProspectsPage() {
         </p>
       )}
 
-      {prospects.length > 0 && (
+      {prospects.length > 0 && (totalRelevant ?? 0) === 0 && (totalOthers ?? 0) > 0 && !showPartialResults && (
+        <div className="rounded-xl border border-amber-200 bg-amber-50 p-6">
+          <p className="text-sm text-amber-800">
+            Aucun résultat ne correspond à tous vos critères. {totalOthers} résultat(s) partiel(s) trouvé(s).
+          </p>
+          <button
+            type="button"
+            onClick={() => setShowPartialResults(true)}
+            className="mt-4 rounded-lg bg-[#EA580C] px-4 py-2 text-sm font-medium text-white transition hover:bg-[#C2410C]"
+          >
+            Afficher les résultats partiels
+          </button>
+        </div>
+      )}
+
+      {prospects.length > 0 && ((totalRelevant ?? 0) > 0 || showPartialResults) && (
         <div className="rounded-xl border border-slate-200 bg-white shadow-sm">
-          <div className="flex items-center justify-between border-b border-slate-200 px-4 py-3">
-            <label className="flex cursor-pointer items-center gap-2 text-sm font-medium text-slate-600">
-              <input
-                type="checkbox"
-                checked={selected.size === prospects.length}
-                onChange={toggleSelectAll}
-                className="h-4 w-4 rounded border-slate-300 text-[#EA580C] focus:ring-[#EA580C]"
-              />
-              Tout sélectionner
-            </label>
+          <div className="flex flex-wrap items-center justify-between gap-4 border-b border-slate-200 px-4 py-3">
+            <div className="flex items-center gap-4">
+              {(totalRelevant ?? 0) > 0 && (
+                <p className="text-sm font-medium text-emerald-700">
+                  {(totalRelevant ?? 0)} résultat(s) correspondent à TOUS vos critères
+                </p>
+              )}
+              <label className="flex cursor-pointer items-center gap-2 text-sm font-medium text-slate-600">
+                <input
+                  type="checkbox"
+                  checked={selected.size === prospects.length}
+                  onChange={toggleSelectAll}
+                  className="h-4 w-4 rounded border-slate-300 text-[#EA580C] focus:ring-[#EA580C]"
+                />
+                Tout sélectionner
+              </label>
+            </div>
             <button
               type="button"
               onClick={handleSaveSelection}
@@ -692,49 +810,72 @@ export default function DashboardProspectsPage() {
             </button>
           </div>
           <ul className="divide-y divide-slate-200">
-            {prospects.map((p) => (
-              <li
-                key={p.linkedin_url}
-                className="flex items-center gap-4 px-4 py-3 transition hover:bg-slate-50"
-              >
-                <input
-                  type="checkbox"
-                  checked={selected.has(p.linkedin_url)}
-                  onChange={() => toggleSelect(p.linkedin_url)}
-                  className="h-4 w-4 rounded border-slate-300 text-[#EA580C] focus:ring-[#EA580C]"
-                />
-                {p.profile_photo ? (
-                  <img
-                    src={p.profile_photo}
-                    alt=""
-                    className="h-12 w-12 rounded-full object-cover"
-                    width={48}
-                    height={48}
-                  />
-                ) : (
-                  <div className="flex h-12 w-12 items-center justify-center rounded-full bg-slate-200 text-lg font-medium text-slate-600">
-                    {p.full_name.charAt(0).toUpperCase()}
-                  </div>
-                )}
-                <div className="min-w-0 flex-1">
-                  <p className="font-medium text-slate-900">{p.full_name}</p>
-                  <p className="text-sm text-slate-600">
-                    <span className="text-slate-500">Poste :</span> {p.job_title || "—"}
-                  </p>
-                  <p className="text-sm text-slate-600">
-                    <span className="text-slate-500">Entreprise :</span> {p.company || "—"}
-                  </p>
-                </div>
-                <a
-                  href={p.linkedin_url}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="text-sm font-medium text-[#EA580C] transition hover:underline"
+            {prospects.flatMap((p, idx) => {
+              const isStrict = idx < (totalRelevant ?? 0);
+              const prevStrict = idx > 0 && idx - 1 < (totalRelevant ?? 0);
+              const showPartialHeader = !isStrict && (prevStrict || (idx === 0 && (totalRelevant ?? 0) === 0));
+              return [
+                ...(showPartialHeader
+                  ? [
+                      <li key={`header-partial-${p.linkedin_url}`} className="border-t-2 border-slate-200 bg-slate-50 px-4 py-2 text-sm font-medium text-slate-600">
+                        ─── Résultats partiels ──
+                      </li>,
+                    ]
+                  : []),
+                <li
+                  key={p.linkedin_url}
+                  className={`flex items-center gap-4 px-4 py-3 transition hover:bg-slate-50 ${!isStrict ? "opacity-75 bg-slate-50/50" : ""}`}
                 >
-                  Voir le profil
-                </a>
-              </li>
-            ))}
+                  <input
+                    type="checkbox"
+                    checked={selected.has(p.linkedin_url)}
+                    onChange={() => toggleSelect(p.linkedin_url)}
+                    className="h-4 w-4 rounded border-slate-300 text-[#EA580C] focus:ring-[#EA580C]"
+                  />
+                  {p.profile_photo ? (
+                    <img
+                      src={p.profile_photo}
+                      alt=""
+                      className="h-12 w-12 rounded-full object-cover"
+                      width={48}
+                      height={48}
+                    />
+                  ) : (
+                    <div className="flex h-12 w-12 items-center justify-center rounded-full bg-slate-200 text-lg font-medium text-slate-600">
+                      {p.full_name.charAt(0).toUpperCase()}
+                    </div>
+                  )}
+                  <div className="min-w-0 flex-1">
+                    <p className="font-medium text-slate-900">{p.full_name}</p>
+                    <p className="text-sm text-slate-600">
+                      <span className="text-slate-500">Poste :</span> {p.job_title || "—"}
+                    </p>
+                    <p className="text-sm text-slate-600">
+                      <span className="text-slate-500">Entreprise :</span> {p.company || "—"}
+                    </p>
+                    <div className="mt-1">
+                      {isStrict ? (
+                        <span className="inline-flex items-center gap-1 rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-700">
+                          ✓ Correspond à tous vos critères{p.matchedTerms?.length ? ` · ${p.matchedTerms.slice(0, 3).join(", ")}` : ""}
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center gap-1 rounded-full bg-slate-200 px-2 py-0.5 text-xs font-medium text-slate-600">
+                          Ce profil ne correspond pas à tous vos critères
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                  <a
+                    href={p.linkedin_url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-sm font-medium text-[#EA580C] transition hover:underline"
+                  >
+                    Voir le profil
+                  </a>
+                </li>,
+              ];
+            })}
           </ul>
         </div>
       )}

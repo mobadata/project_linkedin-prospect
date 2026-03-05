@@ -70,8 +70,40 @@ export async function GET(request: Request) {
 
     return NextResponse.json({ items });
   } catch (err) {
+    const unipileBody = (err as { body?: unknown })?.body;
+    const unipileStatus = (err as { status?: number })?.status;
+    let unipileMsg: string | null = null;
+    if (unipileBody instanceof Blob) {
+      try {
+        const text = await unipileBody.text();
+        try {
+          const parsed = JSON.parse(text) as { message?: string; detail?: string; type?: string };
+          unipileMsg = parsed.message ?? parsed.detail ?? parsed.type ?? text.substring(0, 500);
+        } catch {
+          unipileMsg = text.substring(0, 500);
+        }
+      } catch {
+        unipileMsg = "[Blob non lisible]";
+      }
+    } else if (typeof unipileBody === "object" && unipileBody !== null) {
+      if ("message" in unipileBody) unipileMsg = String((unipileBody as { message?: string }).message);
+      else if ("type" in unipileBody) unipileMsg = String((unipileBody as { type?: string }).type);
+    }
+
     console.error("[search-params] Erreur:", err);
+    console.error("[search-params] Unipile status:", unipileStatus, "body:", unipileMsg ?? JSON.stringify(unipileBody));
+
     const message = err instanceof Error ? err.message : "Erreur inconnue";
-    return NextResponse.json({ error: message }, { status: 500 });
+    const detail = unipileMsg ? `${message} (Unipile: ${unipileMsg})` : message;
+
+    return NextResponse.json(
+      {
+        items: [],
+        error: detail,
+        unipileStatus: unipileStatus ?? null,
+        unipileMessage: unipileMsg,
+      },
+      { status: 200 }
+    );
   }
 }
