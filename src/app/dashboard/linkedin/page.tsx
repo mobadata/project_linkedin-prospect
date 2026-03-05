@@ -43,10 +43,37 @@ export default function DashboardLinkedInPage() {
     if (statusParam === "success") {
       setMessage({
         type: "success",
-        text: "Connexion LinkedIn réussie. Votre compte a été lié.",
+        text: "Connexion LinkedIn réussie. Vérification du statut…",
       });
-      fetchStatus();
       window.history.replaceState({}, "", "/dashboard/linkedin");
+      // Polling: le webhook Unipile peut mettre quelques secondes à mettre à jour la BDD
+      setStatusLoading(true);
+      let cancelled = false;
+      (async () => {
+        const maxAttempts = 10;
+        const interval = 2000;
+        for (let i = 0; i < maxAttempts && !cancelled; i++) {
+          try {
+            const res = await fetch("/api/linkedin/status");
+            if (res.ok) {
+              const data = await res.json();
+              setStatus(data);
+              if (data.connected) {
+                setMessage({ type: "success", text: "Connexion LinkedIn réussie. Votre compte a été lié." });
+                setStatusLoading(false);
+                return;
+              }
+            }
+          } catch { /* retry */ }
+          await new Promise((r) => setTimeout(r, interval));
+        }
+        // Dernier essai après toutes les tentatives
+        if (!cancelled) {
+          await fetchStatus();
+          setMessage({ type: "success", text: "Connexion LinkedIn réussie. Votre compte a été lié." });
+        }
+      })();
+      return () => { cancelled = true; };
     } else if (statusParam === "error") {
       setMessage({
         type: "error",

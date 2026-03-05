@@ -132,7 +132,7 @@ function generateAutoSynonyms(sectorQuery: string): string[] {
 
   for (const [key, syns] of Object.entries(AUTO_SECTOR_MAP)) {
     const keyNorm = normalize(key);
-    if (query.includes(keyNorm) || keyNorm.includes(query)) {
+    if (query === keyNorm || keyNorm.split(/\s+/).some(w => w === query) || query.split(/\s+/).some(w => w === keyNorm)) {
       synonyms.push(...syns);
     }
   }
@@ -213,9 +213,9 @@ function generateGenderVariants(title: string): string[] {
     if (variant !== t) variants.add(variant);
   }
 
-  variants.add(t.replace(/s\b/g, ""));
+  variants.add(t.replace(/\b(\w{4,})s\b/g, "$1"));
 
-  return [...variants];
+  return [...variants].filter(v => v.length >= 3);
 }
 
 function generateSearchQueries(
@@ -241,7 +241,7 @@ function generateSearchQueries(
 
     for (const [key, syns] of Object.entries(SECTOR_SYNONYMS)) {
       const keyNorm = normalize(key);
-      if (normalizedQuery.includes(keyNorm) || keyNorm.includes(normalizedQuery)) {
+      if (normalizedQuery === keyNorm || keyNorm.split(/\s+/).some(w => w === normalizedQuery) || normalizedQuery.split(/\s+/).some(w => w === keyNorm)) {
         const multiWord = syns.filter((s) => s.includes(" "));
         const singleWord = syns.filter((s) => !s.includes(" ") && s.length > 5);
         allSectorTerms.push(...multiWord);
@@ -300,7 +300,7 @@ const SECTOR_SYNONYMS: Record<string, string[]> = {
   ],
   "publicité": [
     "advertising", "publicité", "publicitaire", "agence de publicité",
-    "régie publicitaire", "affichage", "média planning", "achat média",
+    "régie publicitaire", "affichage",
     "DOOH", "OOH", "annonceur",
   ],
   "publicitaire": [
@@ -312,7 +312,6 @@ const SECTOR_SYNONYMS: Record<string, string[]> = {
     "merchandising", "promotionnel", "marquage", "personnalisation",
     "signalétique", "markitems", "régie publicitaire", "affichage",
     "DOOH", "OOH", "agence de publicité", "annonceur",
-    "média planning", "achat média",
   ],
   "objets publicitaires": [
     "goodies", "merchandising", "cadeau entreprise", "cadeaux entreprise",
@@ -351,11 +350,7 @@ function termMatchesText(text: string, term: string): boolean {
 
   for (const variant of variants) {
     if (variant.length < 2) continue;
-    if (variant.length > 6) {
-      if (text.includes(variant)) return true;
-    } else {
-      if (matchWholeWord(text, variant)) return true;
-    }
+    if (matchWholeWord(text, variant)) return true;
   }
   return false;
 }
@@ -391,11 +386,7 @@ function matchesTitle(prospect: ProspectResult, jobTitle: string): boolean {
 
     for (const variant of variants) {
       if (variant.length < 3) continue;
-      if (variant.length > 6) {
-        if (prospectText.includes(variant)) return true;
-      } else {
-        if (matchWholeWord(prospectText, variant)) return true;
-      }
+      if (matchWholeWord(prospectText, variant)) return true;
     }
     return false;
   }).length;
@@ -431,7 +422,7 @@ function matchesSectorStrict(
   let synonyms: string[] = [];
   for (const [key, syns] of Object.entries(SECTOR_SYNONYMS)) {
     const keyNorm = normalize(key);
-    if (normalizedQuery.includes(keyNorm) || keyNorm.includes(normalizedQuery)) {
+    if (normalizedQuery === keyNorm || keyNorm.split(/\s+/).some(w => w === normalizedQuery) || normalizedQuery.split(/\s+/).some(w => w === keyNorm)) {
       synonyms.push(...syns.filter((s) => normalize(s).length >= 4));
     }
   }
@@ -460,9 +451,10 @@ function matchesSectorStrict(
   );
 
   const allMatched = [...new Set([...directMatch, ...synonymMatch, ...autoMatch])];
+  const hasDirectMatch = directMatch.length > 0;
 
   return {
-    matches: allMatched.length > 0,
+    matches: hasDirectMatch || allMatched.length >= 2,
     matchedTerms: allMatched,
   };
 }

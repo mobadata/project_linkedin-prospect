@@ -42,7 +42,14 @@ export async function GET() {
         const linkedinAccounts = (accounts.items ?? []).filter(
           (a) => a.type === "LINKEDIN" && a.id
         );
-        const match = linkedinAccounts[linkedinAccounts.length - 1];
+        // Chercher d'abord par name === user.id (le connect flow envoie name: user.id)
+        const match = linkedinAccounts.find((a) => a.name === user.id)
+          // Fallback: vérifier si le unipile_account_id stocké existe encore
+          ?? (session?.unipile_account_id
+            ? linkedinAccounts.find((a) => a.id === session.unipile_account_id)
+            : undefined)
+          // Dernier recours: dernier compte LinkedIn
+          ?? linkedinAccounts[linkedinAccounts.length - 1];
         if (match?.id) {
           await supabase.from("linkedin_sessions").upsert(
             {
