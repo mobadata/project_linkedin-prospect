@@ -250,7 +250,16 @@ function generateSearchQueries(
   // Collecter TOUS les synonymes du secteur
   const allSectorTerms: string[] = [];
   if (sectorQuery) {
-    allSectorTerms.push(sectorQuery);
+    // Les phrases longues donnent de mauvais resultats sur LinkedIn
+    const sectorWords = sectorQuery.split(/\s+/);
+    const stopWords = ["de", "des", "du", "et", "les", "la", "le", "un", "une", "aux", "en", "par", "pour", "sur", "dans"];
+    if (sectorWords.length <= 3) {
+      allSectorTerms.push(sectorQuery);
+    } else {
+      // Splitter en mots significatifs > 4 chars
+      const significantWords = sectorWords.filter(w => w.length > 4 && !stopWords.includes(w.toLowerCase()));
+      allSectorTerms.push(...significantWords);
+    }
     allSectorTerms.push(...sectorVariants);
 
     const normalize = (str: string) =>
@@ -647,6 +656,8 @@ export async function POST(request: Request) {
 
     const TARGET = 50;
     const MAX_API_CALLS = 15;
+    const MAX_DURATION_MS = 150_000; // 150s max (marge de 30s avant timeout Vercel 180s)
+    const searchStartTime = Date.now();
     const RESULTS_PER_PAGE = 50;
     const seenUrls = new Set<string>();
     const strictResults: ProspectResult[] = [];
@@ -667,7 +678,7 @@ export async function POST(request: Request) {
     for (const query of queries) {
       let start = 0;
 
-      while (strictResults.length < TARGET && apiCallCount < MAX_API_CALLS) {
+      while (strictResults.length < TARGET && apiCallCount < MAX_API_CALLS && (Date.now() - searchStartTime) < MAX_DURATION_MS) {
         try {
           const searchBody: Record<string, unknown> = {
             api: "classic",
@@ -722,11 +733,12 @@ export async function POST(request: Request) {
               const sectorOk = matchesSectorStrict(p, sectorForFilter);
               return titleOk && !sectorOk.matches;
             });
-            const needEnrich = candidates.slice(0, 15); // Max 15 enrichissements par page
+            const needEnrich = candidates.slice(0, 3); // Max 3 enrichissements par page (evite timeout Vercel 180s)
 
             console.log(`[Enrichissement] ${candidates.length} candidats, enrichissement de ${needEnrich.length}`);
 
             for (const prospect of needEnrich) {
+              if ((Date.now() - searchStartTime) > MAX_DURATION_MS) break;
               try {
                 const slug = prospect.linkedin_url.match(/linkedin\.com\/in\/([^/?]+)/)?.[1];
                 if (!slug) continue;
@@ -765,7 +777,7 @@ export async function POST(request: Request) {
                   console.log(`[Enrichi+Match] ${prospect.full_name} → ${prospect.company} → ${sectorAfter.matchedTerms.join(", ")}`);
                 }
 
-                await new Promise((r) => setTimeout(r, 2000 + Math.random() * 2000));
+                await new Promise((r) => setTimeout(r, 1000 + Math.random() * 1000));
               } catch {
                 // Continue
               }
@@ -827,6 +839,10 @@ export async function POST(request: Request) {
       }
 
       if (strictResults.length >= TARGET) break;
+      if ((Date.now() - searchStartTime) > MAX_DURATION_MS) {
+        console.log(`[Search] Temps limite atteint (${Math.round((Date.now() - searchStartTime) / 1000)}s), arrêt avec ${strictResults.length} stricts`);
+        break;
+      }
       await new Promise((r) => setTimeout(r, 2000 + Math.random() * 2000));
     }
 
