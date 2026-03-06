@@ -654,9 +654,11 @@ export async function POST(request: Request) {
     const sectorOriginalText = (body.sectorOriginalText ?? "").trim();
     const sectorForMatching = sectorOriginalText || sectorQuery;
     const hasIndustryIds = industryIds.length > 0;
+    const linkedinFilteredBySector = industryIds.length > 0;
     const sectorForFilter = sectorForMatching || sectorQuery;
-    const sectorVariants = hasIndustryIds ? [] : getSectorVariants(sectorForMatching || sectorQuery);
-    const queries = generateSearchQueries(jobTitle, sectorQuery, sectorVariants, hasIndustryIds);
+    const effectiveSectorForSearch = industryIds.length > 0 ? null : sectorQuery;
+    const sectorVariants = getSectorVariants(effectiveSectorForSearch);
+    const queries = generateSearchQueries(jobTitle, effectiveSectorForSearch, sectorVariants, hasIndustryIds);
 
     // Recherche par localisation/industrie seule : utiliser un keyword générique
     if (queries.length === 0 && (locationIds.length > 0 || industryIds.length > 0)) {
@@ -736,7 +738,7 @@ export async function POST(request: Request) {
             break;
           }
 
-          if (sectorForFilter && prospects.length > 0) {
+          if (sectorForFilter && !linkedinFilteredBySector && prospects.length > 0) {
             const candidates = prospects.filter((p) => {
               const titleOk = matchesTitle(p, jobTitle);
               const sectorOk = matchesSectorStrict(p, sectorForFilter);
@@ -794,13 +796,31 @@ export async function POST(request: Request) {
           }
 
           for (const prospect of prospects) {
-            const result = filterProspectStrict(prospect, jobTitle, sectorForFilter);
+            const titleMatch = jobTitle ? matchesTitle(prospect, jobTitle) : true;
+
+            let sectorMatch: boolean;
+            let matchedTerms: string[] = [];
+
+            if (linkedinFilteredBySector) {
+              sectorMatch = true;
+              matchedTerms = ["filtre LinkedIn"];
+            } else if (sectorForFilter) {
+              const r = matchesSectorStrict(prospect, sectorForFilter);
+              sectorMatch = r.matches;
+              matchedTerms = r.matchedTerms;
+            } else {
+              sectorMatch = true;
+            }
+
+            const passes = titleMatch && sectorMatch;
+
             const enriched = {
               ...prospect,
-              sectorMatch: result.sectorMatch,
-              matchedTerms: result.matchedTerms.length > 0 ? result.matchedTerms : undefined,
+              sectorMatch,
+              matchedTerms: matchedTerms.length > 0 ? matchedTerms : undefined,
             };
-            if (result.passes) {
+
+            if (passes) {
               strictResults.push(enriched);
             } else {
               otherResults.push(enriched);
