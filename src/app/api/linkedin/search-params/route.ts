@@ -93,6 +93,32 @@ export async function GET(request: Request) {
     console.error("[search-params] Erreur:", err);
     console.error("[search-params] Unipile status:", unipileStatus, "body:", unipileMsg ?? JSON.stringify(unipileBody));
 
+    // Si le compte Unipile n'existe plus, marquer la session comme déconnectée
+    if (unipileMsg?.includes("resource_not_found")) {
+      try {
+        const supabase = await createServerSupabaseClient();
+        const { data: { user } } = await supabase.auth.getUser();
+        if (user) {
+          await supabase.from("linkedin_sessions").update({
+            status: "disconnected",
+            unipile_account_id: null,
+            updated_at: new Date().toISOString(),
+          }).eq("user_id", user.id);
+        }
+      } catch (e) {
+        console.error("[search-params] Erreur mise à jour session:", e);
+      }
+
+      return NextResponse.json(
+        {
+          items: [],
+          error: "Votre session LinkedIn a expiré. Veuillez vous reconnecter depuis la page LinkedIn.",
+          expired: true,
+        },
+        { status: 401 }
+      );
+    }
+
     const message = err instanceof Error ? err.message : "Erreur inconnue";
     const detail = unipileMsg ? `${message} (Unipile: ${unipileMsg})` : message;
 

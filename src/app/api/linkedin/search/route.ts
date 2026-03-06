@@ -240,7 +240,8 @@ function generateGenderVariants(title: string): string[] {
 function generateSearchQueries(
   jobTitle: string,
   sectorQuery: string | null,
-  sectorVariants: string[]
+  sectorVariants: string[],
+  hasIndustryIds: boolean = false
 ): string[] {
   const queries: string[] = [];
   const titleVariants = jobTitle?.trim()
@@ -284,7 +285,14 @@ function generateSearchQueries(
 
   const uniqueSectorTerms = [...new Set(allSectorTerms)].slice(0, 15);
 
-  if (titleVariants[0] && uniqueSectorTerms.length > 0) {
+  if (hasIndustryIds) {
+    // Mode A : industryIds résolus — keywords = titre uniquement.
+    // LinkedIn filtre le secteur via ses IDs natifs.
+    for (const title of titleVariants.slice(0, 3)) {
+      if (title) queries.push(title);
+    }
+  } else if (titleVariants[0] && uniqueSectorTerms.length > 0) {
+    // Mode B : pas d'industryIds — mélange titre + secteur dans keywords
     for (const sectorTerm of uniqueSectorTerms) {
       for (const title of titleVariants.slice(0, 2)) {
         queries.push(`${title} ${sectorTerm}`.trim());
@@ -645,9 +653,12 @@ export async function POST(request: Request) {
     const sectorQuery = (body.sectorQuery ?? body.sector_query ?? "").trim() || null;
     const sectorOriginalText = (body.sectorOriginalText ?? "").trim();
     const sectorForMatching = sectorOriginalText || sectorQuery;
-    const sectorForFilter = sectorForMatching || sectorQuery;
-    const sectorVariants = getSectorVariants(sectorForMatching || sectorQuery);
-    const queries = generateSearchQueries(jobTitle, sectorQuery, sectorVariants);
+    const hasIndustryIds = industryIds.length > 0;
+    // Quand industryIds sont résolus, on fait confiance au filtre natif LinkedIn
+    // et on ne fait pas de post-filtrage textuel sur le secteur
+    const sectorForFilter = hasIndustryIds ? null : (sectorForMatching || sectorQuery);
+    const sectorVariants = hasIndustryIds ? [] : getSectorVariants(sectorForMatching || sectorQuery);
+    const queries = generateSearchQueries(jobTitle, sectorQuery, sectorVariants, hasIndustryIds);
 
     // Recherche par localisation/industrie seule : utiliser un keyword générique
     if (queries.length === 0 && (locationIds.length > 0 || industryIds.length > 0)) {
@@ -893,6 +904,28 @@ export async function POST(request: Request) {
     const message = err instanceof Error ? err.message : "Erreur inconnue";
     const detail = unipileMsg ? `${message} (Unipile: ${unipileMsg})` : message;
     console.error("[LinkedIn search] Detail:", detail, "Body:", unipileMsg ?? JSON.stringify(unipileBody));
+
+    // Si le compte Unipile n'existe plus, marquer la session comme déconnectée
+    if (unipileMsg?.includes("resource_not_found")) {
+      try {
+        const supabase = await createServerSupabaseClient();
+        const { data: { user } } = await supabase.auth.getUser();
+        if (user) {
+          await supabase.from("linkedin_sessions").update({
+            status: "disconnected",
+            unipile_account_id: null,
+            updated_at: new Date().toISOString(),
+          }).eq("user_id", user.id);
+        }
+      } catch (e) {
+        console.error("[LinkedIn search] Erreur mise à jour session:", e);
+      }
+      return NextResponse.json(
+        { error: "Votre session LinkedIn a expiré. Veuillez vous reconnecter depuis la page LinkedIn." },
+        { status: 401 }
+      );
+    }
+
     return NextResponse.json(
       { error: "Recherche échouée: " + detail },
       { status: 500 }
