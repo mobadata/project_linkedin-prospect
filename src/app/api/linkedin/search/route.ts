@@ -429,74 +429,33 @@ function matchesTitle(prospect: ProspectResult, jobTitle: string): boolean {
       .filter(Boolean).join(" ")
   );
 
-  const titleWords = normalize(jobTitle)
-    .split(/\s+/)
-    .filter((w) => w.length > 2);
+  const jobNorm = normalize(jobTitle);
 
+  // Règle simplifiée pour "Assistant Commercial" : roles + skills
+  const roles = ["assistant", "assistante", "alternant", "alternance", "apprenti", "apprentie", "stagiaire"];
+  const skills = ["commercial", "sales", "business", "vente", "ventes", "commerciaux", "commerciale", "clientèle", "clients", "développement", "affaires", "account"];
+
+  const jobSuggestsAssistantCommercial =
+    roles.some((r) => jobNorm.includes(r)) && skills.some((s) => jobNorm.includes(s));
+
+  if (jobSuggestsAssistantCommercial) {
+    const hasRole = roles.some(
+      (r) => matchWholeWord(prospectText, r) || prospectText.includes(r)
+    );
+    const hasSkill = skills.some(
+      (s) => matchWholeWord(prospectText, s) || prospectText.includes(s)
+    );
+    return hasRole && hasSkill;
+  }
+
+  // Fallback : au moins un mot du jobTitle matche
+  const titleWords = jobNorm.split(/\s+/).filter((w) => w.length > 2);
   if (titleWords.length === 0) return true;
-
-  // Règle spéciale : si le prospect contient Assistant ET Commercial → Strict (ex: Assistant commercial, Alternance commerciale)
-  const assistantTerms = TITLE_EQUIVALENCES["assistant"] ?? [];
-  const commercialTerms = TITLE_EQUIVALENCES["commercial"] ?? [];
-  const hasAssistant = assistantTerms.some(
-    (t) => matchWholeWord(prospectText, normalize(t)) || prospectText.includes(normalize(t))
+  return titleWords.some(
+    (word) =>
+      matchWholeWord(prospectText, word) ||
+      prospectText.includes(word)
   );
-  const hasCommercial = commercialTerms.some(
-    (t) => matchWholeWord(prospectText, normalize(t)) || prospectText.includes(normalize(t))
-  );
-  if (hasAssistant && hasCommercial) return true;
-
-  const matchCount = titleWords.filter((word) => {
-    // 1. Match direct (avec variantes genre)
-    const variants = new Set<string>();
-    variants.add(word);
-    variants.add(word.replace(/s$/, ""));
-    variants.add(word + "s");
-    variants.add(word + "e");
-    variants.add(word + "es");
-    variants.add(word.replace(/e$/, ""));
-    variants.add(word.replace(/es$/, ""));
-
-    for (const variant of variants) {
-      if (variant.length < 3) continue;
-      if (matchWholeWord(prospectText, variant)) return true;
-    }
-
-    // 2. Match par équivalence
-    let equivalences: string[] = [];
-    const lookupVariants = [
-      word,
-      word.replace(/s$/, ""),
-      word.replace(/e$/, ""),
-      word.replace(/es$/, ""),
-      word.replace(/aux$/, "al"),
-      word.replace(/trice$/, "teur"),
-      word.replace(/euse$/, "eur"),
-    ];
-    for (const variant of lookupVariants) {
-      if (TITLE_EQUIVALENCES[variant]) {
-        equivalences = TITLE_EQUIVALENCES[variant];
-        break;
-      }
-    }
-    for (const equiv of equivalences) {
-      const equivNorm = normalize(equiv);
-      if (equivNorm.length > 6) {
-        if (prospectText.includes(equivNorm)) return true;
-      } else {
-        if (matchWholeWord(prospectText, equivNorm)) return true;
-      }
-    }
-
-    return false;
-  }).length;
-
-  const threshold =
-    titleWords.length <= 2
-      ? titleWords.length
-      : Math.ceil(titleWords.length * 0.6);
-
-  return matchCount >= threshold;
 }
 
 function matchesSectorStrict(
@@ -720,7 +679,6 @@ export async function POST(request: Request) {
 
     for (const query of queries) {
       let start = 0;
-      let emptyCallsForQuery = 0; // Appels consécutifs avec 0 nouveaux profils
 
       while (strictResults.length < TARGET && apiCallCount < MAX_API_CALLS && (Date.now() - searchStartTime) < MAX_DURATION_MS) {
         try {
@@ -767,14 +725,9 @@ export async function POST(request: Request) {
           }
 
           if (prospects.length === 0) {
-            emptyCallsForQuery++;
-            console.log(`[Search] 0 nouveaux résultats (${emptyCallsForQuery}/3), ${emptyCallsForQuery >= 3 ? "passage à la requête suivante" : "essai page suivante"}`);
-            if (emptyCallsForQuery >= 3) break;
-            start += RESULTS_PER_PAGE;
-            if (newItems.length < RESULTS_PER_PAGE) break;
-            continue;
+            console.log(`[Search] 0 nouveaux profils → passage à la requête suivante (économie quotas)`);
+            break;
           }
-          emptyCallsForQuery = 0;
 
           for (const prospect of prospects) {
             const titleMatch = jobTitle ? matchesTitle(prospect, jobTitle) : true;
