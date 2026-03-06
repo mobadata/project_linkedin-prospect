@@ -72,7 +72,8 @@ async function waitForNgrok(maxAttempts = 30) {
 async function main() {
   console.log("🔗 Démarrage de ngrok sur le port", PORT, "...");
   console.log("   (Assurez-vous qu'aucun autre processus n'utilise le port 3000)\n");
-  const ngrokProcess = spawn("npx", ["ngrok", "http", String(PORT)], {
+  const ngrokBin = process.env.NGROK_BIN || "/usr/local/bin/ngrok";
+  const ngrokProcess = spawn(ngrokBin, ["http", String(PORT)], {
     stdio: ["ignore", "pipe", "pipe"],
     detached: true,
   });

@@ -25,10 +25,7 @@ export async function POST() {
     }
 
     if (!isUnipileConfigured()) {
-      return NextResponse.json(
-        { error: "Unipile non configuré" },
-        { status: 500 }
-      );
+      return NextResponse.json({ success: true, updated: 0 });
     }
 
     const sessionRes = await supabase
@@ -112,9 +109,7 @@ export async function POST() {
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Erreur inconnue";
-    return NextResponse.json(
-      { error: "Sync échouée: " + message },
-      { status: 500 }
-    );
+    console.warn("[sync-status]", message);
+    return NextResponse.json({ success: true, updated: 0 });
   }
 }

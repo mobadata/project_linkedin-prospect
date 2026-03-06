@@ -5,6 +5,7 @@
   "scripts": {
     "dev": "next dev --webpack",
     "dev:ngrok": "node scripts/dev-ngrok.mjs",
+    "dev:cron": "node scripts/cron-campaign.mjs",
     "build": "next build",
     "start": "next start",
     "lint": "eslint"

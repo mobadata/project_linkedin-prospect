@@ -29,6 +29,22 @@ interface LogEntry {
   success: boolean;
 }
 
+interface CampaignStatus {
+  pending: number;
+  sent: number;
+  failed: number;
+  skipped: number;
+  running: boolean;
+  recent: Array<{
+    prospect_id: string;
+    full_name: string;
+    status: string;
+    error_message: string | null;
+    processed_at: string | null;
+    created_at: string;
+  }>;
+}
+
 const MIN_DELAY_MS = 5 * 60 * 1000;
 const MAX_DELAY_MS = 15 * 60 * 1000;
 
@@ -45,6 +61,8 @@ export default function DashboardCampaignsPage() {
   const [log, setLog] = useState<LogEntry[]>([]);
   const [checkingId, setCheckingId] = useState<string | null>(null);
   const [sendingMessageId, setSendingMessageId] = useState<string | null>(null);
+  const [campaignStatus, setCampaignStatus] = useState<CampaignStatus | null>(null);
+  const [startingBackground, setStartingBackground] = useState(false);
   const abortRef = useRef(false);
   const pausedRef = useRef(false);
 
@@ -115,18 +133,52 @@ export default function DashboardCampaignsPage() {
     }
   };
 
+  const fetchCampaignStatus = async () => {
+    try {
+      const res = await fetch("/api/linkedin/campaign/status");
+      const data = await res.json().catch(() => ({}));
+      if (res.ok) setCampaignStatus(data);
+    } catch {
+      setCampaignStatus(null);
+    }
+  };
+
+  const startBackgroundCampaign = async () => {
+    if (startingBackground) return;
+    setStartingBackground(true);
+    try {
+      const res = await fetch("/api/linkedin/campaign/start", { method: "POST" });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data.success) {
+        addLog(data.message ?? "Campagne lancée en arrière-plan", "", true);
+        await fetchCampaignStatus();
+        await fetchProspects();
+        await fetchStats();
+      } else {
+        addLog(data.error ?? "Erreur", "", false);
+      }
+    } catch {
+      addLog("Erreur réseau", "", false);
+    } finally {
+      setStartingBackground(false);
+    }
+  };
+
   useEffect(() => {
     (async () => {
       setLoading(true);
-      const [, , syncRes] = await Promise.all([
-        fetchProspects(),
-        fetchStats(),
+      const [syncRes, statusRes] = await Promise.all([
         fetch("/api/linkedin/invite/sync-status", { method: "POST" }),
+        fetch("/api/linkedin/campaign/status"),
       ]);
+      await fetchProspects();
+      await fetchStats();
       const syncData = await syncRes.json().catch(() => ({}));
       if (syncData?.success && syncData?.updated > 0) {
         await fetchProspects();
       }
+      const statusData = await statusRes.json().catch(() => ({}));
+      if (statusData?.running !== undefined) setCampaignStatus(statusData);
       setLoading(false);
     })();
   }, []);
@@ -134,6 +186,16 @@ export default function DashboardCampaignsPage() {
   useEffect(() => {
     pausedRef.current = campaignPaused;
   }, [campaignPaused]);
+
+  useEffect(() => {
+    if (!campaignStatus?.running) return;
+    const interval = setInterval(async () => {
+      await fetchCampaignStatus();
+      await fetchProspects();
+      await fetchStats();
+    }, 10000);
+    return () => clearInterval(interval);
+  }, [campaignStatus?.running]);
 
   const addLog = (message: string, prospectName: string, success: boolean) => {
     setLog((prev) => [
@@ -241,6 +303,7 @@ export default function DashboardCampaignsPage() {
         <h1 className="text-2xl font-bold text-slate-900">Campagnes d&apos;invitations</h1>
         <p className="mt-1 text-sm text-slate-500">
           Envoyez des invitations LinkedIn aux prospects en statut « Nouveau ». Limite quotidienne respectée automatiquement.
+          « Lancer en arrière-plan » : la campagne continue même si vous quittez la page. Configurez un cron (cron-job.org) sur votre URL + <code className="rounded bg-slate-100 px-1">/api/linkedin/campaign/process</code> toutes les 5 min.
         </p>
       </div>
 
@@ -262,16 +325,41 @@ export default function DashboardCampaignsPage() {
             <span className="text-sm text-slate-500">(reste {stats.remaining})</span>
           )}
         </div>
-        <div className="flex gap-2">
+        {campaignStatus?.running && (
+          <div className="flex items-center gap-2 rounded-lg bg-amber-50 px-3 py-1.5 text-sm text-amber-800">
+            <span className="inline-block h-2 w-2 animate-pulse rounded-full bg-amber-500" />
+            En cours : {campaignStatus.pending} en attente · {campaignStatus.sent} envoyées
+          </div>
+        )}
+        <div className="flex flex-wrap gap-2">
           {!campaignRunning ? (
-            <button
-              type="button"
-              onClick={runCampaign}
-              disabled={loading || (stats != null && stats.remaining <= 0) || (stats?.account_restricted ?? false)}
-              className="rounded-lg bg-[#EA580C] px-4 py-2 text-sm font-medium text-white transition hover:bg-[#C2410C] disabled:opacity-50"
-            >
-              Lancer la campagne d&apos;invitations
-            </button>
+            <>
+              <button
+                type="button"
+                onClick={startBackgroundCampaign}
+                disabled={
+                  loading ||
+                  startingBackground ||
+                  (stats != null && stats.remaining <= 0) ||
+                  (stats?.account_restricted ?? false)
+                }
+                className="rounded-lg bg-[#EA580C] px-4 py-2 text-sm font-medium text-white transition hover:bg-[#C2410C] disabled:opacity-50"
+              >
+                {startingBackground ? "Lancement…" : "Lancer en arrière-plan"}
+              </button>
+              <button
+                type="button"
+                onClick={runCampaign}
+                disabled={
+                  loading ||
+                  (stats != null && stats.remaining <= 0) ||
+                  (stats?.account_restricted ?? false)
+                }
+                className="rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-600 transition hover:bg-slate-50 disabled:opacity-50"
+              >
+                Lancer immédiat (rester sur la page)
+              </button>
+            </>
           ) : (
             <>
               <button
@@ -293,15 +381,18 @@ export default function DashboardCampaignsPage() {
         </div>
       </div>
 
-      {log.length > 0 && (
+      {((log.length > 0) || (campaignStatus?.recent?.length ?? 0) > 0) && (
         <div className="rounded-xl border border-slate-200 bg-white shadow-sm">
           <h2 className="border-b border-slate-200 px-4 py-3 text-sm font-medium text-slate-600">
             Journal des invitations
+            {campaignStatus?.running && (
+              <span className="ml-2 text-amber-600">· Arrière-plan actif</span>
+            )}
           </h2>
           <ul className="max-h-64 overflow-y-auto p-4 font-mono text-sm">
             {log.map((entry, i) => (
               <li
-                key={i}
+                key={`log-${i}`}
                 className={`border-b border-slate-200 py-1.5 last:border-0 ${
                   entry.success ? "text-slate-600" : "text-red-600"
                 }`}
@@ -309,6 +400,23 @@ export default function DashboardCampaignsPage() {
                 <span className="text-slate-500">[{entry.time}]</span>{" "}
                 {entry.prospectName && <span className="font-medium text-slate-900">{entry.prospectName} — </span>}
                 {entry.message}
+              </li>
+            ))}
+            {campaignStatus?.recent?.map((r, i) => (
+              <li
+                key={`recent-${r.prospect_id}-${i}`}
+                className={`border-b border-slate-200 py-1.5 last:border-0 ${
+                  r.status === "sent" || r.status === "skipped" ? "text-slate-600" : "text-red-600"
+                }`}
+              >
+                <span className="text-slate-500">
+                  [{r.processed_at ? new Date(r.processed_at).toLocaleTimeString("fr-FR") : "—"}]
+                </span>{" "}
+                <span className="font-medium text-slate-900">{r.full_name} — </span>
+                {r.status === "sent" && "Invitation envoyée"}
+                {r.status === "skipped" && (r.error_message || "Déjà connecté")}
+                {r.status === "failed" && (r.error_message || "Échec")}
+                {r.status === "pending" && "En attente…"}
               </li>
             ))}
           </ul>
