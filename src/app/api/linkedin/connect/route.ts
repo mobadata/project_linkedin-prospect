@@ -85,6 +85,17 @@ export async function POST() {
     const errorType = bodyObj?.type;
     const fullError = detail ? `${message} — ${detail}` : message;
 
+    if (errorType === "errors/no_client_session") {
+      return NextResponse.json(
+        {
+          error:
+            "Le Hosted Auth n'est pas disponible pour votre instance Unipile. Contactez le support Unipile pour activer cette fonctionnalité (erreur: no_client_session).",
+          debug: { unipile: errBody },
+        },
+        { status: 503 }
+      );
+    }
+
     if (errorType === "errors/missing_credentials") {
       const title = bodyObj?.title ?? "";
       const bodyStr = JSON.stringify(errBody ?? "");
