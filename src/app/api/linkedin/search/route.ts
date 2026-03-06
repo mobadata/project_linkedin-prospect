@@ -420,42 +420,36 @@ function matchesTitle(prospect: ProspectResult, jobTitle: string): boolean {
   if (!jobTitle?.trim()) return true;
 
   const normalize = (str: string) =>
-    str?.toLowerCase().normalize("NFD")
-      .replace(/[\u0300-\u036f]/g, "")
-      .replace(/[-_]/g, " ") || "";
+    str?.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[-_]/g, " ") || "";
 
-  const prospectText = normalize(
-    [prospect.job_title, prospect.headline, prospect.company]
-      .filter(Boolean).join(" ")
+  const prospectText = normalize([prospect.job_title, prospect.headline].filter(Boolean).join(" "));
+  const searchTitle = normalize(jobTitle);
+
+  // 1. Définition des groupes de synonymes pour les métiers courants
+  const groups = [
+    { key: "assistant", syns: ["assistant", "assistante", "alternant", "alternance", "apprenti", "apprentissage", "junior", "support"] },
+    { key: "commercial", syns: ["commercial", "commerciale", "sales", "vente", "business", "developpement", "account"] },
+    { key: "responsable", syns: ["responsable", "directeur", "manager", "head", "chef", "lead", "gerant"] },
+  ];
+
+  // 2. Identifier quels groupes sont présents dans la RECHERCHE de l'utilisateur
+  const activeGroups = groups.filter((g) =>
+    searchTitle.includes(g.key) || g.syns.some((s) => searchTitle.includes(s))
   );
 
-  const jobNorm = normalize(jobTitle);
-
-  // Règle simplifiée pour "Assistant Commercial" : roles + skills
-  const roles = ["assistant", "assistante", "alternant", "alternance", "apprenti", "apprentie", "stagiaire"];
-  const skills = ["commercial", "sales", "business", "vente", "ventes", "commerciaux", "commerciale", "clientèle", "clients", "développement", "affaires", "account"];
-
-  const jobSuggestsAssistantCommercial =
-    roles.some((r) => jobNorm.includes(r)) && skills.some((s) => jobNorm.includes(s));
-
-  if (jobSuggestsAssistantCommercial) {
-    const hasRole = roles.some(
-      (r) => matchWholeWord(prospectText, r) || prospectText.includes(r)
-    );
-    const hasSkill = skills.some(
-      (s) => matchWholeWord(prospectText, s) || prospectText.includes(s)
-    );
-    return hasRole && hasSkill;
-  }
-
-  // Fallback : au moins un mot du jobTitle matche
-  const titleWords = jobNorm.split(/\s+/).filter((w) => w.length > 2);
-  if (titleWords.length === 0) return true;
-  return titleWords.some(
-    (word) =>
-      matchWholeWord(prospectText, word) ||
-      prospectText.includes(word)
+  // 3. Si l'utilisateur a tapé des mots qui ne sont pas dans nos groupes, on les ajoute
+  const otherWords = searchTitle.split(/\s+/).filter(
+    (w) => w.length > 3 && !groups.some((g) => g.key === w || g.syns.includes(w))
   );
+
+  // 4. LE TEST : Le profil doit contenir au moins UN mot de CHAQUE groupe actif
+  const groupMatch = activeGroups.length === 0 || activeGroups.every((g) =>
+    g.syns.some((s) => prospectText.includes(s)) || prospectText.includes(g.key)
+  );
+
+  const wordMatch = otherWords.length > 0 ? otherWords.some((w) => prospectText.includes(w)) : true;
+
+  return groupMatch && wordMatch;
 }
 
 function matchesSectorStrict(
@@ -634,12 +628,13 @@ export async function POST(request: Request) {
 
     const body = await request.json().catch(() => ({}));
     const jobTitle = (body.jobTitle ?? body.job_title ?? "").trim();
-    let locationIds: number[] = body.locationIds ?? [];
+    const locationIds: number[] = body.locationIds ?? [];
     const industryIds: number[] = body.industryIds ?? [];
 
-    // Paris (106383538) → ajouter Paris et périphérie (90009659) pour Boulogne, Levallois, etc.
-    if (locationIds.includes(PARIS_ID) && !locationIds.includes(PARIS_ET_PERIPHERIE_ID)) {
-      locationIds = [...locationIds, PARIS_ET_PERIPHERIE_ID];
+    // Paris (106383538) → ajouter Paris et périphérie (90009659) pour 92, 93, 94 (Boulogne, Levallois, etc.)
+    let finalLocationIds = [...locationIds];
+    if (finalLocationIds.includes(PARIS_ID) && !finalLocationIds.includes(PARIS_ET_PERIPHERIE_ID)) {
+      finalLocationIds.push(PARIS_ET_PERIPHERIE_ID);
     }
     const sectorQuery = (body.sectorQuery ?? body.sector_query ?? "").trim() || null;
     const sectorOriginalText = (body.sectorOriginalText ?? "").trim();
@@ -652,7 +647,7 @@ export async function POST(request: Request) {
     const queries = generateSearchQueries(jobTitle, effectiveSectorForSearch, sectorVariants, hasIndustryIds);
 
     // Recherche par localisation/industrie seule : utiliser un keyword générique
-    if (queries.length === 0 && (locationIds.length > 0 || industryIds.length > 0)) {
+    if (queries.length === 0 && (finalLocationIds.length > 0 || industryIds.length > 0)) {
       queries.push("*");
     }
 
@@ -687,7 +682,7 @@ export async function POST(request: Request) {
             category: "people",
             keywords: query,
           };
-          if (locationIds.length > 0) searchBody.location = locationIds;
+          if (finalLocationIds.length > 0) searchBody.location = finalLocationIds;
           if (industryIds.length > 0) searchBody.industry = { include: industryIds.map(String) };
 
           console.log(
