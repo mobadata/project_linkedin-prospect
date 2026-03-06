@@ -1,8 +1,10 @@
 import { NextResponse } from "next/server";
 import { createServerSupabaseClient } from "@/src/lib/supabase/server";
+import { createSupabaseAdmin } from "@/src/lib/supabase/admin";
 
 /**
  * Arrête la campagne en arrière-plan en supprimant les invitations en attente.
+ * Utilise le client admin pour éviter les problèmes de politique RLS.
  */
 export async function POST() {
   try {
@@ -15,7 +17,9 @@ export async function POST() {
       return NextResponse.json({ error: "Non authentifié" }, { status: 401 });
     }
 
-    const { data, error } = await supabase
+    const admin = createSupabaseAdmin();
+
+    const { data, error } = await admin
       .from("invitation_queue")
       .delete()
       .eq("user_id", user.id)
@@ -30,6 +34,12 @@ export async function POST() {
     }
 
     const cancelled = data?.length ?? 0;
+
+    try {
+      await admin.from("campaign_paused").delete().eq("user_id", user.id);
+    } catch {
+      // Table campaign_paused peut ne pas exister
+    }
 
     return NextResponse.json({
       success: true,
