@@ -24,16 +24,30 @@ export async function GET(request: Request) {
 
     const supabase = createSupabaseAdmin();
 
-    const { data: item } = await supabase
+    const { data: allPending } = await supabase
       .from("invitation_queue")
       .select("id, user_id, prospect_id")
       .eq("status", "pending")
       .order("created_at", { ascending: true })
-      .limit(1)
-      .single();
+      .limit(50);
+
+    let pausedSet = new Set<string>();
+    try {
+      const { data: pausedUsers } = await supabase
+        .from("campaign_paused")
+        .select("user_id")
+        .eq("paused", true);
+      pausedSet = new Set((pausedUsers ?? []).map((p) => p.user_id));
+    } catch {
+      // Table campaign_paused peut ne pas exister
+    }
+    const item = (allPending ?? []).find((i) => !pausedSet.has(i.user_id));
 
     if (!item) {
-      return NextResponse.json({ processed: false, message: "Aucune invitation en attente" });
+      return NextResponse.json({
+        processed: false,
+        message: pausedSet.size > 0 ? "Campagnes en pause" : "Aucune invitation en attente",
+      });
     }
 
     await supabase

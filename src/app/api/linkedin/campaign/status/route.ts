@@ -40,6 +40,18 @@ export async function GET() {
       full_name: prospectMap.get(i.prospect_id) ?? "—",
     }));
 
+    let paused = false;
+    try {
+      const { data: pausedRow } = await supabase
+        .from("campaign_paused")
+        .select("paused")
+        .eq("user_id", user.id)
+        .single();
+      paused = pausedRow?.paused ?? false;
+    } catch {
+      // Table peut ne pas exister encore
+    }
+
     return NextResponse.json({
       pending: pending.length,
       sent: sent.length,
@@ -47,6 +59,7 @@ export async function GET() {
       skipped: skipped.length,
       total: items?.length ?? 0,
       running: pending.length > 0,
+      paused,
       recent,
     });
   } catch (err) {

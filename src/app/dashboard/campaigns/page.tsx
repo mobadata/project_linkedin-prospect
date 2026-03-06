@@ -35,6 +35,7 @@ interface CampaignStatus {
   failed: number;
   skipped: number;
   running: boolean;
+  paused?: boolean;
   recent: Array<{
     prospect_id: string;
     full_name: string;
@@ -64,6 +65,7 @@ export default function DashboardCampaignsPage() {
   const [campaignStatus, setCampaignStatus] = useState<CampaignStatus | null>(null);
   const [startingBackground, setStartingBackground] = useState(false);
   const [stoppingBackground, setStoppingBackground] = useState(false);
+  const [pausingBackground, setPausingBackground] = useState(false);
   const abortRef = useRef(false);
   const pausedRef = useRef(false);
 
@@ -162,6 +164,30 @@ export default function DashboardCampaignsPage() {
       addLog("Erreur réseau", "", false);
     } finally {
       setStartingBackground(false);
+    }
+  };
+
+  const togglePauseBackground = async () => {
+    if (pausingBackground) return;
+    setPausingBackground(true);
+    try {
+      const newPaused = !campaignStatus?.paused;
+      const res = await fetch("/api/linkedin/campaign/pause", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ paused: newPaused }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data.success) {
+        addLog(data.message ?? (newPaused ? "Campagne mise en pause" : "Campagne reprise"), "", true);
+        await fetchCampaignStatus();
+      } else {
+        addLog(data.error ?? "Erreur", "", false);
+      }
+    } catch {
+      addLog("Erreur réseau", "", false);
+    } finally {
+      setPausingBackground(false);
     }
   };
 
@@ -349,10 +375,27 @@ export default function DashboardCampaignsPage() {
         </div>
         {campaignStatus?.running && (
           <>
-            <div className="flex items-center gap-2 rounded-lg bg-amber-50 px-3 py-1.5 text-sm text-amber-800">
-              <span className="inline-block h-2 w-2 animate-pulse rounded-full bg-amber-500" />
-              En cours : {campaignStatus.pending} en attente · {campaignStatus.sent} envoyées
+            <div className={`flex items-center gap-2 rounded-lg px-3 py-1.5 text-sm ${campaignStatus.paused ? "bg-slate-100 text-slate-600" : "bg-amber-50 text-amber-800"}`}>
+              {campaignStatus.paused ? (
+                <>
+                  <span className="inline-block h-2 w-2 rounded-full bg-slate-400" />
+                  En pause : {campaignStatus.pending} en attente · {campaignStatus.sent} envoyées
+                </>
+              ) : (
+                <>
+                  <span className="inline-block h-2 w-2 animate-pulse rounded-full bg-amber-500" />
+                  En cours : {campaignStatus.pending} en attente · {campaignStatus.sent} envoyées
+                </>
+              )}
             </div>
+            <button
+              type="button"
+              onClick={togglePauseBackground}
+              disabled={pausingBackground}
+              className="rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-600 transition hover:bg-slate-50 disabled:opacity-50"
+            >
+              {pausingBackground ? "…" : campaignStatus.paused ? "Reprendre" : "Mettre en pause"}
+            </button>
             <button
               type="button"
               onClick={stopBackgroundCampaign}
