@@ -69,11 +69,18 @@ const TITLE_EQUIVALENCES: Record<string, string[]> = {
     "sales", "business", "clientèle", "clients", "développement",
     "affaires", "account",
   ],
+  "assistant": [
+    "assistant", "assistante", "alternance", "apprenti", "apprentie",
+    "stagiaire", "alternant", "alternante",
+  ],
   "directeur": [
     "directeur", "directrice", "responsable", "manager", "head",
     "chef", "cheffe", "lead",
   ],
 };
+
+const PARIS_ID = 106383538;
+const PARIS_ET_PERIPHERIE_ID = 90009659;
 
 const AUTO_SECTOR_MAP: Record<string, string[]> = {
   "batiment": [
@@ -428,6 +435,17 @@ function matchesTitle(prospect: ProspectResult, jobTitle: string): boolean {
 
   if (titleWords.length === 0) return true;
 
+  // Règle spéciale : si le prospect contient Assistant ET Commercial → Strict (ex: Assistant commercial, Alternance commerciale)
+  const assistantTerms = TITLE_EQUIVALENCES["assistant"] ?? [];
+  const commercialTerms = TITLE_EQUIVALENCES["commercial"] ?? [];
+  const hasAssistant = assistantTerms.some(
+    (t) => matchWholeWord(prospectText, normalize(t)) || prospectText.includes(normalize(t))
+  );
+  const hasCommercial = commercialTerms.some(
+    (t) => matchWholeWord(prospectText, normalize(t)) || prospectText.includes(normalize(t))
+  );
+  if (hasAssistant && hasCommercial) return true;
+
   const matchCount = titleWords.filter((word) => {
     // 1. Match direct (avec variantes genre)
     const variants = new Set<string>();
@@ -445,7 +463,6 @@ function matchesTitle(prospect: ProspectResult, jobTitle: string): boolean {
     }
 
     // 2. Match par équivalence
-    // Chercher les équivalences pour le mot ET ses variantes
     let equivalences: string[] = [];
     const lookupVariants = [
       word,
@@ -494,6 +511,16 @@ function matchesSectorStrict(
   const prospectText = normalize(
     [prospect.headline, prospect.company, prospect.job_title].filter(Boolean).join(" ")
   );
+
+  // Quick check : Publicité ou Ad dans headline/company → sectorMatch sans appel API
+  const sectorNorm = normalize(sectorQuery);
+  const isPubSector = /publicit|advertising|ad\b|annonceur|goodies|merchandising|promotionnel/.test(sectorNorm);
+  if (isPubSector) {
+    const quickMatch = /\bpublicit|\bad\b|advertising|annonceur|goodies|merchandising|promotionnel/i.test(
+      [prospect.headline ?? "", prospect.company ?? ""].join(" ")
+    );
+    if (quickMatch) return { matches: true, matchedTerms: ["publicité/ad"] };
+  }
 
   const sectorWords = normalize(sectorQuery)
     .split(/\s+/)
@@ -648,8 +675,13 @@ export async function POST(request: Request) {
 
     const body = await request.json().catch(() => ({}));
     const jobTitle = (body.jobTitle ?? body.job_title ?? "").trim();
-    const locationIds: number[] = body.locationIds ?? [];
+    let locationIds: number[] = body.locationIds ?? [];
     const industryIds: number[] = body.industryIds ?? [];
+
+    // Paris (106383538) → ajouter Paris et périphérie (90009659) pour Boulogne, Levallois, etc.
+    if (locationIds.includes(PARIS_ID) && !locationIds.includes(PARIS_ET_PERIPHERIE_ID)) {
+      locationIds = [...locationIds, PARIS_ET_PERIPHERIE_ID];
+    }
     const sectorQuery = (body.sectorQuery ?? body.sector_query ?? "").trim() || null;
     const sectorOriginalText = (body.sectorOriginalText ?? "").trim();
     const sectorForMatching = sectorOriginalText || sectorQuery;
@@ -688,6 +720,7 @@ export async function POST(request: Request) {
 
     for (const query of queries) {
       let start = 0;
+      let emptyCallsForQuery = 0; // Appels consécutifs avec 0 nouveaux profils
 
       while (strictResults.length < TARGET && apiCallCount < MAX_API_CALLS && (Date.now() - searchStartTime) < MAX_DURATION_MS) {
         try {
@@ -734,66 +767,14 @@ export async function POST(request: Request) {
           }
 
           if (prospects.length === 0) {
-            console.log(`[Search] 0 nouveaux résultats, passage à la requête suivante`);
-            break;
+            emptyCallsForQuery++;
+            console.log(`[Search] 0 nouveaux résultats (${emptyCallsForQuery}/3), ${emptyCallsForQuery >= 3 ? "passage à la requête suivante" : "essai page suivante"}`);
+            if (emptyCallsForQuery >= 3) break;
+            start += RESULTS_PER_PAGE;
+            if (newItems.length < RESULTS_PER_PAGE) break;
+            continue;
           }
-
-          if (sectorForFilter && !linkedinFilteredBySector && prospects.length > 0) {
-            const candidates = prospects.filter((p) => {
-              const titleOk = matchesTitle(p, jobTitle);
-              const sectorOk = matchesSectorStrict(p, sectorForFilter);
-              return titleOk && !sectorOk.matches;
-            });
-            const needEnrich = candidates.slice(0, 3); // Max 3 enrichissements par page (evite timeout Vercel 180s)
-
-            console.log(`[Enrichissement] ${candidates.length} candidats, enrichissement de ${needEnrich.length}`);
-
-            for (const prospect of needEnrich) {
-              if ((Date.now() - searchStartTime) > MAX_DURATION_MS) break;
-              try {
-                const slug = prospect.linkedin_url.match(/linkedin\.com\/in\/([^/?]+)/)?.[1];
-                if (!slug) continue;
-
-                const profile = (await unipileClient.users.getProfile({
-                  account_id: sessionRes.data.unipile_account_id,
-                  identifier: slug,
-                  linkedin_sections: "*" as never,
-                })) as {
-                  work_experience?: Array<{ company?: string; description?: string }>;
-                  current_positions?: Array<{ company?: string; description?: string }>;
-                  industry?: string;
-                  summary?: string;
-                };
-
-                const enrichedParts: string[] = [];
-                const workExp = profile.work_experience ?? profile.current_positions ?? [];
-                const currentPos = workExp[0];
-                if (currentPos?.company) {
-                  prospect.company = currentPos.company;
-                  enrichedParts.push(currentPos.company);
-                }
-                if (currentPos?.description) enrichedParts.push(currentPos.description);
-                if (profile.industry) enrichedParts.push(profile.industry);
-                if (profile.summary) enrichedParts.push(profile.summary);
-
-                for (const pos of workExp.slice(0, 3)) {
-                  if (pos.company) enrichedParts.push(pos.company);
-                  if ("description" in pos && pos.description) enrichedParts.push(pos.description);
-                }
-
-                prospect.headline = [prospect.headline, ...enrichedParts].filter(Boolean).join(" ");
-
-                const sectorAfter = matchesSectorStrict(prospect, sectorForFilter);
-                if (sectorAfter.matches) {
-                  console.log(`[Enrichi+Match] ${prospect.full_name} → ${prospect.company} → ${sectorAfter.matchedTerms.join(", ")}`);
-                }
-
-                await new Promise((r) => setTimeout(r, 1000 + Math.random() * 1000));
-              } catch {
-                // Continue
-              }
-            }
-          }
+          emptyCallsForQuery = 0;
 
           for (const prospect of prospects) {
             const titleMatch = jobTitle ? matchesTitle(prospect, jobTitle) : true;
