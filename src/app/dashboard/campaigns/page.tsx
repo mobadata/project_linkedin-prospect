@@ -63,6 +63,7 @@ export default function DashboardCampaignsPage() {
   const [sendingMessageId, setSendingMessageId] = useState<string | null>(null);
   const [campaignStatus, setCampaignStatus] = useState<CampaignStatus | null>(null);
   const [startingBackground, setStartingBackground] = useState(false);
+  const [stoppingBackground, setStoppingBackground] = useState(false);
   const abortRef = useRef(false);
   const pausedRef = useRef(false);
 
@@ -161,6 +162,27 @@ export default function DashboardCampaignsPage() {
       addLog("Erreur réseau", "", false);
     } finally {
       setStartingBackground(false);
+    }
+  };
+
+  const stopBackgroundCampaign = async () => {
+    if (stoppingBackground) return;
+    setStoppingBackground(true);
+    try {
+      const res = await fetch("/api/linkedin/campaign/stop", { method: "POST" });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data.success) {
+        addLog(data.message ?? "Campagne arrêtée", "", true);
+        await fetchCampaignStatus();
+        await fetchProspects();
+        await fetchStats();
+      } else {
+        addLog(data.error ?? "Erreur", "", false);
+      }
+    } catch {
+      addLog("Erreur réseau", "", false);
+    } finally {
+      setStoppingBackground(false);
     }
   };
 
@@ -326,10 +348,20 @@ export default function DashboardCampaignsPage() {
           )}
         </div>
         {campaignStatus?.running && (
-          <div className="flex items-center gap-2 rounded-lg bg-amber-50 px-3 py-1.5 text-sm text-amber-800">
-            <span className="inline-block h-2 w-2 animate-pulse rounded-full bg-amber-500" />
-            En cours : {campaignStatus.pending} en attente · {campaignStatus.sent} envoyées
-          </div>
+          <>
+            <div className="flex items-center gap-2 rounded-lg bg-amber-50 px-3 py-1.5 text-sm text-amber-800">
+              <span className="inline-block h-2 w-2 animate-pulse rounded-full bg-amber-500" />
+              En cours : {campaignStatus.pending} en attente · {campaignStatus.sent} envoyées
+            </div>
+            <button
+              type="button"
+              onClick={stopBackgroundCampaign}
+              disabled={stoppingBackground}
+              className="rounded-lg border border-red-200 bg-red-50 px-4 py-2 text-sm font-medium text-red-700 transition hover:bg-red-100 disabled:opacity-50"
+            >
+              {stoppingBackground ? "Arrêt…" : "Arrêter la campagne"}
+            </button>
+          </>
         )}
         <div className="flex flex-wrap gap-2">
           {!campaignRunning ? (
