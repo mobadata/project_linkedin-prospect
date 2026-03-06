@@ -636,6 +636,9 @@ export async function POST(request: Request) {
     if (finalLocationIds.includes(PARIS_ID) && !finalLocationIds.includes(PARIS_ET_PERIPHERIE_ID)) {
       finalLocationIds.push(PARIS_ET_PERIPHERIE_ID);
     }
+    // Unipile exige des strings pour industry/location (schéma: "type":"string","pattern":"^\\d+$")
+    const formattedIndustry = industryIds.map((id) => String(id));
+    const formattedLocation = finalLocationIds.map((id) => String(id));
     const sectorQuery = (body.sectorQuery ?? body.sector_query ?? "").trim() || null;
     const sectorOriginalText = (body.sectorOriginalText ?? "").trim();
     const sectorForMatching = sectorOriginalText || sectorQuery;
@@ -681,10 +684,11 @@ export async function POST(request: Request) {
           const searchBody: Record<string, unknown> = {
             api: "classic",
             category: "people",
-            keywords: query,
+            keywords: query.trim(),
+            ...(formattedLocation.length > 0 && { location: formattedLocation }),
+            ...(formattedIndustry.length > 0 && { industry: { include: formattedIndustry } }),
+            ...(jobTitle && { advanced_keywords: { title: jobTitle } }),
           };
-          if (finalLocationIds.length > 0) searchBody.location = finalLocationIds;
-          if (industryIds.length > 0) searchBody.industry = { include: industryIds.map(String) };
 
           console.log(
             `[Search] "${query}" start=${start} | stricts=${strictResults.length}/${TARGET} | calls=${apiCallCount}`
