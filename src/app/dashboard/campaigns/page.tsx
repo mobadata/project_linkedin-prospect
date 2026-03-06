@@ -351,7 +351,7 @@ export default function DashboardCampaignsPage() {
         <h1 className="text-2xl font-bold text-slate-900">Campagnes d&apos;invitations</h1>
         <p className="mt-1 text-sm text-slate-500">
           Envoyez des invitations LinkedIn aux prospects en statut « Nouveau ». Limite quotidienne respectée automatiquement.
-          « Lancer en arrière-plan » : la campagne continue même si vous quittez la page. Configurez un cron (cron-job.org) sur votre URL + <code className="rounded bg-slate-100 px-1">/api/linkedin/campaign/process</code> toutes les 5 min.
+          « Lancer en arrière-plan » : la campagne continue même si vous quittez la page.
         </p>
       </div>
 
