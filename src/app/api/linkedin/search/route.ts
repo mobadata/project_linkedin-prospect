@@ -654,9 +654,7 @@ export async function POST(request: Request) {
     const sectorOriginalText = (body.sectorOriginalText ?? "").trim();
     const sectorForMatching = sectorOriginalText || sectorQuery;
     const hasIndustryIds = industryIds.length > 0;
-    // Quand industryIds sont résolus, on fait confiance au filtre natif LinkedIn
-    // et on ne fait pas de post-filtrage textuel sur le secteur
-    const sectorForFilter = hasIndustryIds ? null : (sectorForMatching || sectorQuery);
+    const sectorForFilter = sectorForMatching || sectorQuery;
     const sectorVariants = hasIndustryIds ? [] : getSectorVariants(sectorForMatching || sectorQuery);
     const queries = generateSearchQueries(jobTitle, sectorQuery, sectorVariants, hasIndustryIds);
 
@@ -696,8 +694,8 @@ export async function POST(request: Request) {
             category: "people",
             keywords: query,
           };
-          if (locationIds.length > 0) searchBody.location = locationIds.map(String);
-          if (industryIds.length > 0) searchBody.industry = industryIds.map(String);
+          if (locationIds.length > 0) searchBody.location = locationIds;
+          if (industryIds.length > 0) searchBody.industry = { include: industryIds.map(String) };
 
           console.log(
             `[Search] "${query}" start=${start} | stricts=${strictResults.length}/${TARGET} | calls=${apiCallCount}`
