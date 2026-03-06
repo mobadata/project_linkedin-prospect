@@ -642,7 +642,8 @@ export async function POST(request: Request) {
     const hasIndustryIds = industryIds.length > 0;
     const linkedinFilteredBySector = industryIds.length > 0;
     const sectorForFilter = sectorForMatching || sectorQuery;
-    const effectiveSectorForSearch = industryIds.length > 0 ? null : sectorQuery;
+    // Toujours utiliser le texte secteur (même avec industryIds) pour keywords LinkedIn + filtrage Strict
+    const effectiveSectorForSearch = sectorQuery;
     const sectorVariants = getSectorVariants(effectiveSectorForSearch);
     const queries = generateSearchQueries(jobTitle, effectiveSectorForSearch, sectorVariants, hasIndustryIds);
 

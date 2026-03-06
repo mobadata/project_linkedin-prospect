@@ -365,8 +365,11 @@ export default function DashboardProspectsPage() {
     setShowPartialResults(false);
 
     try {
-      const sectorQuery = (industryText || selectedIndustry?.title || "").trim() || undefined;
-      const sectorOriginalTextToSend = (sectorOriginalText || industryText || "").trim() || undefined;
+      // 1. Sauvegarder le texte AVANT de vider les champs (évite le bug sectorQuery vide)
+      const rawSectorText = industryText.trim();
+      const currentIndustryTitle = selectedIndustry?.title || "";
+      const finalSectorQuery = (rawSectorText || currentIndustryTitle || sectorOriginalText || "").trim() || undefined;
+
       let resolvedIndustry = selectedIndustry;
       let resolvedLocation = selectedLocation;
 
@@ -391,6 +394,9 @@ export default function DashboardProspectsPage() {
       const industryIds = resolvedIndustry ? [Number(resolvedIndustry.id)] : [];
       const locationIds = resolvedLocation ? [Number(resolvedLocation.id)] : [];
 
+      // 2. Toujours envoyer le texte du secteur (même avec industryIds) pour le filtrage Strict
+      const sectorToSend = finalSectorQuery || resolvedIndustry?.title || sectorOriginalText || undefined;
+
       const res = await fetch("/api/linkedin/search", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -398,8 +404,8 @@ export default function DashboardProspectsPage() {
           jobTitle: jobTitle.trim() || undefined,
           locationIds,
           industryIds,
-          sectorQuery: sectorQuery || undefined,
-          sectorOriginalText: sectorOriginalTextToSend,
+          sectorQuery: sectorToSend,
+          sectorOriginalText: sectorToSend,
         }),
       });
 
