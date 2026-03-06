@@ -5,7 +5,7 @@ import { createServerSupabaseClient } from "@/src/lib/supabase/server";
  * Lance une campagne d'invitations en arrière-plan.
  * Ajoute tous les prospects "new" à la file d'attente.
  * La campagne continue même si l'utilisateur quitte la page.
- * Configurez un cron (ex: */5 * * * *) sur /api/linkedin/campaign/process
+ * Configurez un cron (toutes les 5 min) sur /api/linkedin/campaign/process
  */
 export async function POST() {
   try {
